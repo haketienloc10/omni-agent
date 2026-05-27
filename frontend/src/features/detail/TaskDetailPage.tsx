@@ -2,7 +2,6 @@ import { useState, useMemo } from "react";
 import { useNavigate } from "react-router";
 import "./TaskDetailPage.css";
 import "./TaskDetailPanel.css";
-import StatusBadge from "../../components/StatusBadge";
 import AgentAvatar from "../../components/AgentAvatar";
 import Button from "../../components/Button";
 import { useToast } from "../../components/Toast";
@@ -17,35 +16,13 @@ import type { Project } from "../../types/project";
 import type { Run } from "../../types/run";
 
 const RESUMABLE_STATUSES = new Set<TaskStatus>(["paused", "failed"]);
+const DESKTOP_TRANSCRIPT_QUERY = "(min-width: 701px)";
 
-function runnerLabel(status: TaskStatus): string {
-  switch (status) {
-    case "running":
-      return "Running";
-    case "paused":
-      return "Paused";
-    case "failed":
-      return "Exited";
-    case "completed":
-    case "cancelled":
-      return "Exited";
-    case "assigned":
-      return "Idle";
-    default:
-      return "—";
+function defaultRightPanelOpen(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return true;
   }
-}
-
-function formatUpdated(iso: string): string {
-  const date = new Date(iso);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMin = Math.floor(diffMs / 60000);
-  if (diffMin < 1) return "Just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffH = Math.floor(diffMin / 60);
-  if (diffH < 24) return `${diffH}h ago`;
-  return date.toLocaleDateString();
+  return window.matchMedia(DESKTOP_TRANSCRIPT_QUERY).matches;
 }
 
 function agentDisplayLabel(task: Task): string {
@@ -53,11 +30,6 @@ function agentDisplayLabel(task: Task): string {
   if (task.agent === "codex") return "Codex CLI";
   if (task.agent) return task.agent;
   return "—";
-}
-
-function roleDisplayLabel(role: string | null): string {
-  if (!role) return "—";
-  return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
 function formatTerminalTime(iso: string): string {
@@ -172,12 +144,14 @@ function TerminalTranscript({
   isLoading,
   isError,
   onRetry,
+  onClose,
 }: {
   task: Task;
   runs: Run[];
   isLoading: boolean;
   isError: boolean;
   onRetry: () => void;
+  onClose: () => void;
 }) {
   return (
     <section className="tdp__terminal" aria-label="Agent terminal transcript">
@@ -186,6 +160,14 @@ function TerminalTranscript({
         <span className="tdp__terminal-dot tdp__terminal-dot--yellow" aria-hidden="true" />
         <span className="tdp__terminal-dot tdp__terminal-dot--green" aria-hidden="true" />
         <span className="tdp__terminal-title">agent-run:{task.id}</span>
+        <button
+          type="button"
+          className="tdp__terminal-close"
+          onClick={onClose}
+          aria-label="Close transcript panel"
+        >
+          x
+        </button>
       </div>
 
       <div className="tdp__terminal-scroll">
@@ -229,21 +211,6 @@ function TerminalTranscript({
           })}
       </div>
     </section>
-  );
-}
-
-interface StatCardProps {
-  label: string;
-  value: React.ReactNode;
-  title?: string;
-}
-
-function StatCard({ label, value, title }: StatCardProps) {
-  return (
-    <div className="tdp__stat-card" title={title}>
-      <div className="tdp__stat-label">{label}</div>
-      <div className="tdp__stat-value">{value}</div>
-    </div>
   );
 }
 
@@ -316,6 +283,7 @@ interface TaskDetailPageProps {
 
 export default function TaskDetailPage({ task, project }: TaskDetailPageProps) {
   const navigate = useNavigate();
+  const [rightPanelOpen, setRightPanelOpen] = useState(defaultRightPanelOpen);
 
   const agentRuntime = task.agent === "claude" || task.agent === "codex" ? task.agent : undefined;
   const agentName = task.agent ?? task.role ?? "unassigned";
@@ -328,17 +296,14 @@ export default function TaskDetailPage({ task, project }: TaskDetailPageProps) {
     [commentsQuery.data, runsQuery.data],
   );
 
-  const totalRuns = runsQuery.data?.length ?? 0;
-  const totalComments = commentsQuery.data?.length ?? 0;
   const finalOutput = useMemo(
     () => finalOutputFrom(task, runsQuery.data ?? [], timeline.events),
     [task, runsQuery.data, timeline.events],
   );
-  const evidenceLabel = useMemo(() => {
-    if (runsQuery.isPending) return "—";
-    if (totalRuns === 0) return "No evidence";
-    return `${totalRuns} run${totalRuns === 1 ? "" : "s"}`;
-  }, [runsQuery.isPending, totalRuns]);
+  const workspaceClassName = [
+    "tdp__workspace",
+    rightPanelOpen ? "tdp__workspace--transcript-open" : "tdp__workspace--transcript-closed",
+  ].join(" ");
 
   return (
     <div className="tdp" data-testid="task-detail-page">
@@ -383,21 +348,45 @@ export default function TaskDetailPage({ task, project }: TaskDetailPageProps) {
             />
           </div>
         )}
+        <button
+          type="button"
+          className="tdp__transcript-toggle"
+          onClick={() => setRightPanelOpen((isOpen) => !isOpen)}
+          aria-label={rightPanelOpen ? "Hide transcript panel" : "Show transcript panel"}
+          aria-expanded={rightPanelOpen}
+        >
+          {rightPanelOpen ? "Hide transcript" : "Show transcript"}
+        </button>
       </header>
 
-      <div className="tdp__workspace">
-        <ConversationSnapshot task={task} finalOutput={finalOutput} />
-        <TerminalTranscript
-          task={task}
-          runs={runsQuery.data ?? []}
-          isLoading={runsQuery.isLoading}
-          isError={runsQuery.isError}
-          onRetry={() => void runsQuery.refetch()}
-        />
-      </div>
+      <div className={workspaceClassName}>
+        <main className="tdp__main-workspace">
+          <ConversationSnapshot task={task} finalOutput={finalOutput} />
 
-      {/* Bottom follow-up prompt (paused/failed only) */}
-      {showFollowup && <FollowupPrompt projectId={project.id} task={task} />}
+          {/* Bottom follow-up prompt (paused/failed only) */}
+          {showFollowup && <FollowupPrompt projectId={project.id} task={task} />}
+        </main>
+        {rightPanelOpen && (
+          <>
+            <button
+              type="button"
+              className="tdp__terminal-backdrop"
+              aria-label="Close transcript panel"
+              onClick={() => setRightPanelOpen(false)}
+            />
+            <aside className="tdp__terminal-pane">
+              <TerminalTranscript
+                task={task}
+                runs={runsQuery.data ?? []}
+                isLoading={runsQuery.isLoading}
+                isError={runsQuery.isError}
+                onRetry={() => void runsQuery.refetch()}
+                onClose={() => setRightPanelOpen(false)}
+              />
+            </aside>
+          </>
+        )}
+      </div>
     </div>
   );
 }

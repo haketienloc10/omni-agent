@@ -37,6 +37,95 @@ pub async fn complete_run(
     Ok(())
 }
 
+fn normalize_log_tail_for_display(log_tail: &str) -> Option<String> {
+    let mut normalized = Vec::new();
+
+    for line in log_tail.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !trimmed.starts_with('{') {
+            continue;
+        }
+
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+
+        let Some(root) = value.as_object() else {
+            continue;
+        };
+
+        if root.get("type").and_then(|v| v.as_str()) == Some("event_msg") {
+            normalized.push(trimmed.to_string());
+            continue;
+        }
+
+        if root.get("type").and_then(|v| v.as_str()) == Some("item.completed") {
+            let Some(item) = root.get("item").and_then(|v| v.as_object()) else {
+                continue;
+            };
+            if item.get("type").and_then(|v| v.as_str()) != Some("agent_message") {
+                continue;
+            }
+            let Some(text) = item.get("text").and_then(|v| v.as_str()) else {
+                continue;
+            };
+
+            normalized.push(
+                serde_json::json!({
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "agent_message",
+                        "message": text,
+                        "phase": "final_answer"
+                    }
+                })
+                .to_string(),
+            );
+            continue;
+        }
+
+        if root.get("type").and_then(|v| v.as_str()) == Some("turn.completed") {
+            let Some(usage) = root.get("usage").and_then(|v| v.as_object()) else {
+                continue;
+            };
+
+            normalized.push(
+                serde_json::json!({
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {
+                                "input_tokens": usage.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0),
+                                "output_tokens": usage.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0),
+                                "total_tokens": usage.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0)
+                                    + usage.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0),
+                                "cached_input_tokens": usage.get("cached_input_tokens").and_then(|v| v.as_i64()).unwrap_or(0)
+                            }
+                        }
+                    }
+                })
+                .to_string(),
+            );
+        }
+    }
+
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized.join("\n"))
+    }
+}
+
+fn normalize_run_for_response(mut run: Run) -> Run {
+    if let Some(log_tail) = run.log_tail.as_deref()
+        && let Some(normalized) = normalize_log_tail_for_display(log_tail)
+    {
+        run.log_tail = Some(normalized);
+    }
+    run
+}
+
 async fn resolve_project_id(pool: &SqlitePool, project_id: &str) -> Result<String, AppError> {
     sqlx::query_scalar::<_, String>("SELECT id FROM projects WHERE id = ?")
         .bind(project_id)
@@ -79,7 +168,7 @@ pub async fn get_run_by_id(
     let project_pk = resolve_project_id(pool, project_id).await?;
     verify_task_for_project(pool, &project_pk, task_id).await?;
 
-    sqlx::query_as::<_, Run>(
+    let run = sqlx::query_as::<_, Run>(
         "SELECT r.id, r.session_id, r.run_number, r.input, r.exit_code, r.log_path, r.log_tail, r.started_at, r.ended_at \
          FROM runs r \
          INNER JOIN sessions s ON r.session_id = s.id \
@@ -92,7 +181,9 @@ pub async fn get_run_by_id(
     .ok_or_else(|| AppError::NotFound {
         code: "run_not_found",
         message: format!("Run {} not found for task {}", run_id, task_id),
-    })
+    })?;
+
+    Ok(normalize_run_for_response(run))
 }
 
 pub async fn list_runs_for_task(
@@ -114,7 +205,7 @@ pub async fn list_runs_for_task(
     .fetch_all(pool)
     .await?;
 
-    Ok(runs)
+    Ok(runs.into_iter().map(normalize_run_for_response).collect())
 }
 
 #[cfg(test)]
@@ -170,6 +261,34 @@ mod tests {
         let tail = read_log_tail(&path, 100, 10_240).await.unwrap();
         let lines: Vec<&str> = tail.lines().collect();
         assert_eq!(lines.len(), 10);
+    }
+
+    #[test]
+    fn normalize_log_tail_converts_codex_jsonl_to_frontend_events() {
+        let log_tail = [
+            r#"{"type":"thread.started","thread_id":"019e6939-6344-7eb2-be93-bd8986505918"}"#,
+            r#"{"type":"turn.started"}"#,
+            r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Xin chào. Bạn muốn mình làm gì tiếp?"}}"#,
+            r#"{"type":"turn.completed","usage":{"input_tokens":63246,"cached_input_tokens":31744,"output_tokens":62,"reasoning_output_tokens":17}}"#,
+        ]
+        .join("\n");
+
+        let normalized = normalize_log_tail_for_display(&log_tail).unwrap();
+
+        assert!(!normalized.contains("thread.started"));
+        assert!(!normalized.contains("turn.started"));
+        assert!(normalized.contains(r#""type":"agent_message""#));
+        assert!(normalized.contains(r#""message":"Xin chào. Bạn muốn mình làm gì tiếp?""#));
+        assert!(normalized.contains(r#""type":"token_count""#));
+        assert!(normalized.contains(r#""input_tokens":63246"#));
+        assert!(normalized.contains(r#""output_tokens":62"#));
+        assert!(normalized.contains(r#""cached_input_tokens":31744"#));
+    }
+
+    #[test]
+    fn normalize_log_tail_leaves_plain_output_as_fallback() {
+        let log_tail = "Plain agent output\nover multiple lines";
+        assert_eq!(normalize_log_tail_for_display(log_tail), None);
     }
 
     async fn setup_pool() -> SqlitePool {

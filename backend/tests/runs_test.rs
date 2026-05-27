@@ -153,6 +153,19 @@ async fn seed_run(pool: &SqlitePool, session_id: &str, run_id: &str, run_number:
     .unwrap();
 }
 
+async fn seed_run_with_log_tail(pool: &SqlitePool, session_id: &str, run_id: &str, log_tail: &str) {
+    sqlx::query(
+        "INSERT INTO runs (id, session_id, run_number, input, exit_code, log_path, log_tail, started_at, ended_at) \
+         VALUES (?, ?, 1, NULL, 0, '/tmp/run.log', ?, '2026-05-25T10:00:00+00:00', '2026-05-25T10:00:30+00:00')",
+    )
+    .bind(run_id)
+    .bind(session_id)
+    .bind(log_tail)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 async fn setup_assigned_task(app: &Router, agent: &str) -> (String, String) {
     let req = Request::builder()
         .method("POST")
@@ -237,6 +250,34 @@ async fn get_run_by_id_returns_200_with_camelcase_body() {
     assert!(body.get("run_number").is_none());
     assert_eq!(body["id"], "run-1");
     assert_eq!(body["runNumber"], 1);
+}
+
+#[tokio::test]
+async fn get_run_by_id_normalizes_codex_jsonl_log_tail_for_chat_view() {
+    let (app, state) = build_runs_app().await;
+    let (project_id, task_id, session_id) = seed_project_task_session(&state.db).await;
+    let codex_log_tail = [
+        r#"{"type":"thread.started","thread_id":"019e6939-6344-7eb2-be93-bd8986505918"}"#,
+        r#"{"type":"turn.started"}"#,
+        r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Xin chào. Bạn muốn mình làm gì tiếp?"}}"#,
+        r#"{"type":"turn.completed","usage":{"input_tokens":63246,"cached_input_tokens":31744,"output_tokens":62,"reasoning_output_tokens":17}}"#,
+    ]
+    .join("\n");
+    seed_run_with_log_tail(&state.db, &session_id, "run-codex", &codex_log_tail).await;
+
+    let (status, body) = get_json(
+        &app,
+        format!("/api/projects/{project_id}/tasks/{task_id}/runs/run-codex"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {}", body);
+    let log_tail = body["logTail"].as_str().unwrap();
+    assert!(!log_tail.contains("thread.started"));
+    assert!(!log_tail.contains("turn.started"));
+    assert!(log_tail.contains(r#""type":"agent_message""#));
+    assert!(log_tail.contains(r#""message":"Xin chào. Bạn muốn mình làm gì tiếp?""#));
+    assert!(log_tail.contains(r#""type":"token_count""#));
 }
 
 #[tokio::test]

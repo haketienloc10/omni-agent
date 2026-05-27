@@ -3,12 +3,13 @@
 */
 
 .tdp {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
   height: 100%;
   min-height: 100%;
-  max-width: 1200px;
+  width: 100%;
   gap: var(--space-3);
+  overflow: hidden;
 }
 
 /* Nav / breadcrumb row */
@@ -63,6 +64,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
+  min-width: 0;
 }
 
 .tdp__title-block {
@@ -79,6 +81,27 @@
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+}
+
+.tdp__transcript-toggle {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-body-s);
+}
+
+.tdp__transcript-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.tdp__transcript-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
 }
 
 .tdp__title {
@@ -161,20 +184,37 @@
   flex-wrap: wrap;
 }
 
-/* Body layout: main content only (sidebar removed) */
-.tdp__body {
-  display: flex;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
 .tdp__workspace {
-  flex: 1 1 auto;
+  position: relative;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(320px, 0.82fr) minmax(420px, 1.18fr);
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
   gap: var(--space-3);
   overflow: hidden;
+}
+
+.tdp__workspace--transcript-closed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tdp__main-workspace {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  overflow: hidden;
+}
+
+.tdp__terminal-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.tdp__terminal-backdrop {
+  display: none;
 }
 
 .tdp__chat-snapshot,
@@ -216,12 +256,15 @@
 }
 
 .tdp__chat-message-body {
+  min-width: 0;
   padding: var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--text-primary);
   background: var(--bg-card);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   line-height: var(--line-height-body);
 }
 
@@ -256,6 +299,7 @@
 }
 
 .tdp__terminal {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -296,10 +340,38 @@
 }
 
 .tdp__terminal-title {
+  min-width: 0;
+  flex: 1 1 auto;
   margin-left: var(--space-2);
   color: #9ca3af;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tdp__terminal-close {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #374151;
+  border-radius: var(--radius-sm);
+  background: #172033;
+  color: #cbd5e1;
+  cursor: pointer;
+  font-family: var(--font-family-mono);
+  line-height: 1;
+}
+
+.tdp__terminal-close:hover {
+  background: #1f2937;
+  color: #f8fafc;
+}
+
+.tdp__terminal-close:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
 }
 
 .tdp__terminal-scroll {
@@ -328,6 +400,7 @@
   gap: var(--space-2);
   color: #f8fafc;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .tdp__terminal-prompt {
@@ -367,8 +440,10 @@
 .tdp__terminal-output {
   max-height: 26rem;
   margin: 0;
-  overflow: auto;
-  white-space: pre;
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   color: #cbd5e1;
   font: inherit;
 }
@@ -450,7 +525,6 @@
 
 /* Bottom follow-up prompt */
 .tdp__followup {
-  position: relative;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -495,14 +569,42 @@
 
 /* Responsive */
 @media (max-width: 700px) {
-  .tdp__workspace {
-    grid-template-columns: 1fr;
-    overflow-y: auto;
+  .tdp {
+    overflow: hidden;
   }
 
-  .tdp__chat-snapshot,
-  .tdp__terminal {
-    min-height: 360px;
+  .tdp__workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .tdp__main-workspace {
+    min-height: 0;
+  }
+
+  .tdp__chat-snapshot {
+    min-height: 0;
+  }
+
+  .tdp__terminal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: block;
+    border: none;
+    background: rgba(0, 0, 0, 0.45);
+    cursor: pointer;
+  }
+
+  .tdp__terminal-pane {
+    position: fixed;
+    top: var(--space-3);
+    right: var(--space-3);
+    bottom: var(--space-3);
+    left: var(--space-3);
+    z-index: 31;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
   }
 
   .tdp__followup {

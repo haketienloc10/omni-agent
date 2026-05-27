@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import TaskDetailPage from "./TaskDetailPage";
 import type { Project } from "../../types/project";
 import type { Run } from "../../types/run";
@@ -27,6 +28,22 @@ vi.mock("../../components/Toast", () => ({
 
 import { useRunList } from "../../hooks/useRunList";
 import { useCommentList } from "../../hooks/useCommentList";
+
+function mockViewport(matches: boolean) {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+}
 
 const project: Project = {
   id: "proj-1",
@@ -83,6 +100,10 @@ function mockQueries(runs: Run[] = [run]) {
 }
 
 describe("TaskDetailPage", () => {
+  beforeEach(() => {
+    mockViewport(true);
+  });
+
   it("renders conversation snapshot beside a terminal transcript", () => {
     mockQueries();
 
@@ -101,6 +122,53 @@ describe("TaskDetailPage", () => {
     expect(screen.getByLabelText("Agent terminal transcript")).toHaveTextContent(
       "codex run OMNI-001 --role coder",
     );
+    expect(screen.getByLabelText("Agent terminal transcript")).toHaveTextContent(
+      "npm --prefix frontend run build",
+    );
+  });
+
+  it("toggles the transcript panel without removing the main conversation", async () => {
+    const user = userEvent.setup();
+    mockQueries();
+
+    render(
+      <MemoryRouter>
+        <TaskDetailPage task={task} project={project} />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Hide transcript panel" }));
+
+    expect(screen.queryByLabelText("Agent terminal transcript")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Input and final output")).toHaveTextContent(
+      "Show the original request and the agent result.",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Show transcript panel" }));
+
+    expect(screen.getByLabelText("Agent terminal transcript")).toHaveTextContent(
+      "codex run OMNI-001 --role coder",
+    );
+  });
+
+  it("defaults the transcript panel closed on narrow viewports", async () => {
+    const user = userEvent.setup();
+    mockViewport(false);
+    mockQueries();
+
+    render(
+      <MemoryRouter>
+        <TaskDetailPage task={task} project={project} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByLabelText("Agent terminal transcript")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Input and final output")).toHaveTextContent(
+      "Implemented terminal transcript.",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Show transcript panel" }));
+
     expect(screen.getByLabelText("Agent terminal transcript")).toHaveTextContent(
       "npm --prefix frontend run build",
     );
